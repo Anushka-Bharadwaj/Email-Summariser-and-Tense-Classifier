@@ -1,0 +1,124 @@
+import re
+import spacy
+from transformers import BartTokenizer, BartForConditionalGeneration
+
+# Initialize the BART tokenizer and model for summarization
+tokenizer = BartTokenizer.from_pretrained('facebook/bart-large-cnn')
+model = BartForConditionalGeneration.from_pretrained('facebook/bart-large-cnn')
+
+# Load spaCy English model for tense classification
+nlp = spacy.load("en_core_web_sm")
+# Function to validate input (symbols and numbers handling)
+def validate_input(text):
+    # Check for unwanted symbols (allowing a more complete set of symbols)
+    if re.search(r'[^\w\s#$%^&*(),.}?!{@\-_+=|\/><":;~`]', text):
+        return "Error: Invalid input with unwanted symbols or annotations."
+
+    # Extract all words and numbers
+    words = re.findall(r'\b\w+\b', text)
+
+    # If no valid words exist but only symbols, return an error
+    if len(words) == 0:
+        return "Error: Input contains no valid words, only symbols or numbers."
+
+    # Extract numbers in the input
+    numbers = re.findall(r'\d+', text)
+
+    # Check for invalid long number sequences (not 10, 11, or 13 digits)
+    if numbers:  #numbers
+            return "Number sequence detected."
+
+    return "valid"
+
+# Function to summarize the email content
+def summarize_text(text, word_count):
+    # Encode the input text and set up BART model for summarization
+    inputs = tokenizer.encode("summarize: " + text, return_tensors="pt", max_length=1024, truncation=True)
+
+    # Determine the summarization length based on word count
+    if word_count <= 100:
+        max_length = max(word_count // 2, 15)
+    else:
+        max_length = max(word_count // 3, 15)
+    min_length = max_length // 2     
+
+    summary_ids = model.generate(
+        inputs,
+        max_length=max_length,
+        min_length=min_length,
+        length_penalty=2.0,
+        num_beams=4,
+        early_stopping=True
+    )
+
+    summary = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+    return summary
+
+# Function to classify the tense of the text
+def classify_tense(text):
+    doc = nlp(text)
+    tenses = {"past": 0, "present": 0, "future": 0}
+
+    for token in doc:
+        # Past tense verbs
+        if token.tag_ in ["VBD", "VBN"]:
+            tenses["past"] += 1
+        # Present tense verbs
+        elif token.tag_ in ["VBP", "VBZ", "VBG"]:
+            tenses["present"] += 1
+        # Future tense with modals (e.g., "will")
+        elif token.tag_ == "MD" and token.head.tag_ == "VB":
+            tenses["future"] += 1
+
+    # Determine the predominant tense
+    predominant_tense = max(tenses, key=tenses.get)
+
+    # Map to a more user-friendly output
+    if tenses["past"] > 0 and tenses["future"] > 0:
+        return "Mixed Tense (past and future)"
+    elif tenses["past"] > 0 and tenses["present"] > 0:
+        return "Mixed Tense (past and present)"
+    return predominant_tense.capitalize()
+
+# Main interactive function
+def main():
+    email_text = input("Enter the text: ")
+
+    # Validate the input text
+    validation_result = validate_input(email_text)
+    if validation_result != "valid":
+        print(validation_result)
+        return
+
+    # Calculate word count of the input text
+    word_count = len(email_text.split())
+    
+    # Classify the tense of the original email
+    original_tense = classify_tense(email_text)
+
+    # Check if the text is too short to summarize
+    if word_count < 30:
+        print("The email is already in summarized form.")
+        summary = email_text  # No summarization performed
+        summary_word_count = word_count
+    else:
+        # Summarize the email
+        summary = summarize_text(email_text, word_count)
+        summary_word_count = len(summary.split())
+    print(f"Original Word Count: {word_count}")
+    print(f"Summarized Word Count: {summary_word_count}")
+    # Print the summary and word counts
+    if word_count >= 30:
+        print("\nSummary:\n", summary)
+    
+    # Classify the tense of the summary (if it's been created)
+    if word_count >= 30:
+      print("\nPredominant Tense of Original Text:", original_tense)
+      tense_summary = classify_tense(summary)
+      print("\nPredominant Tense of Summary:", tense_summary)
+    else:
+      print("\nPredominant Tense of Original Text:", original_tense)
+
+# Run the main function
+if __name__ == '__main__':
+    main()
